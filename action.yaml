@@ -1,0 +1,113 @@
+name: "EAS Build and Submit"
+description: "Build and submit an EAS build."
+
+inputs:
+  expo-token:
+    description: "The Expo token to use for the build."
+    required: true
+  platform:
+    description: "The platform to build for."
+    required: true
+  profile:
+    description: "The profile to build for."
+    required: true
+  disable-ccache:
+    description: "Disable ccache for the build."
+    required: false
+    default: "false"
+  working-directory:
+    description: "The working directory for the build."
+    required: false
+    default: "."
+
+outputs:
+  build-path:
+    description: "The full path to the build."
+    value: ${{ steps.set-build-path.outputs.build-path }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: 🔑 Set environment variables
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        if [ "${{ inputs.platform }}" == "ios" ]; then
+          BUILD_EXT="ipa"
+        elif [ "${{ inputs.platform }}" == "android" ]; then
+          BUILD_EXT="apk"
+        else
+          BUILD_EXT=""
+        fi
+        BUILD_WORKING_DIRECTORY="$(dirname $PWD)/build"
+        BUILD_FILENAME="build-${{ inputs.platform }}-${{ inputs.profile }}-${{ github.sha }}.$BUILD_EXT"
+        BUILD_PATH="$BUILD_WORKING_DIRECTORY/$BUILD_FILENAME"
+        echo "BUILD_WORKING_DIRECTORY=$BUILD_WORKING_DIRECTORY" >> $GITHUB_ENV
+        echo "BUILD_FILENAME=$BUILD_FILENAME" >> $GITHUB_ENV
+        echo "BUILD_PATH=$BUILD_PATH" >> $GITHUB_ENV
+        echo "CCACHE_DIR=$HOME/Library/Caches/ccache" >> $GITHUB_ENV
+        echo "EXPO_TOKEN=${{ inputs.expo-token }}" >> $GITHUB_ENV
+
+    - name: 📦 Setup ccache
+      if: inputs.platform == 'ios' && inputs.disable-ccache != 'true'
+      shell: bash
+      run: |
+        brew install ccache
+        ccache --version
+
+    - name: 📦 Cache ccache
+      if: inputs.platform == 'ios' && inputs.disable-ccache != 'true'
+      uses: actions/cache@v4
+      with:
+        path: ~/Library/Caches/ccache
+        key: ${{ runner.os }}-ccache-${{ github.sha }}
+        restore-keys: |
+          ${{ runner.os }}-ccache-
+
+    - name: 📦 Cache Pods
+      if: inputs.platform == 'ios'
+      uses: actions/cache@v4
+      with:
+        path: ~/Library/Caches/CocoaPods
+        key: ${{ runner.os }}-pods-${{ hashFiles('**/package-lock.json', '**/yarn.lock', '**/pnpm-lock.yaml', '**/bun.lockb', '**/npm-shrinkwrap.json') }}
+        restore-keys: |
+          ${{ runner.os }}-pods-
+
+    - name: 📊 Show ccache stats [prebuild]
+      if: inputs.platform == 'ios' && inputs.disable-ccache != 'true'
+      shell: bash
+      run: |
+        ccache -s || echo "ccache not available"
+
+    - name: 👷 Build app
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        EAS_LOCAL_BUILD_SKIP_CLEANUP: 1
+        EAS_LOCAL_BUILD_WORKINGDIR: ${{ env.BUILD_WORKING_DIRECTORY }}
+        COCOAPODS_PARALLEL_CODE_SIGN: true
+        COMPILER_INDEX_STORE_ENABLE: NO
+        USE_CCACHE: ${{ inputs.disable-ccache != 'true' && '1' || '0' }}
+      run: |
+        # Add ccache compiler wrappers to PATH if enabled
+        if [ "${{ inputs.disable-ccache }}" != "true" ]; then
+          export PATH="$(brew --prefix)/opt/ccache/libexec:$PATH"
+        fi
+
+        npx eas-cli@latest build --local \
+          --non-interactive \
+          --output=${{ env.BUILD_PATH }} \
+          --platform=${{ inputs.platform }} \
+          --profile=${{ inputs.profile }}
+
+    - name: 📊 Show ccache stats [postbuild]
+      if: inputs.platform == 'ios' && inputs.disable-ccache != 'true'
+      shell: bash
+      run: |
+        ccache -s || echo "ccache not available"
+
+    - name: 📤 Output build path
+      id: set-build-path
+      shell: bash
+      run: |
+        echo "build-path=${{ env.BUILD_PATH }}" >> $GITHUB_OUTPUT

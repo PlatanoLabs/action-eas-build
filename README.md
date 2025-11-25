@@ -29,7 +29,7 @@ jobs:
       
       - run: npm install 
       
-      - uses: PlatanoLabs/action-eas-build@main
+      - uses: PlatanoLabs/action-eas-build@v0.1.0
         id: build
         with:
           expo-token: ${{ secrets.EXPO_TOKEN }}
